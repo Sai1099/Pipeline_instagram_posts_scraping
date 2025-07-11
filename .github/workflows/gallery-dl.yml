@@ -1,4 +1,4 @@
-name: Download Instagram Posts by Username (Public Only)
+name: Download Instagram Posts by Username (with Cookies)
 
 on:
   workflow_dispatch:
@@ -6,31 +6,48 @@ on:
       instagram_username:
         description: 'Instagram username to download posts from'
         required: true
-        default: 'instagram'
+        default: 'marketsbyzerodha'
 
 jobs:
   download:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
 
-    - name: Install gallery-dl
-      run: pip install -U gallery-dl
+      - name: Install gallery-dl
+        run: pip install -U gallery-dl
 
-    - name: Download Public Instagram Posts
-      run: |
-        mkdir -p downloads
-        gallery-dl --verbose -d downloads "https://www.instagram.com/${{ github.event.inputs.instagram_username }}/"
+      - name: Configure gallery-dl with Instagram cookies and user-agent
+        run: |
+          mkdir -p ~/.config/gallery-dl
+          cat <<EOF > ~/.config/gallery-dl/config.json
+          {
+            "extractor": {
+              "instagram": {
+                "cookies": {
+                  "sessionid": "${{ secrets.INSTAGRAM_SESSIONID }}",
+                  "ds_user_id": "${{ secrets.INSTAGRAM_USER_ID }}"
+                },
+                "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+              }
+            }
+          }
+          EOF
 
-    - name: Upload Downloaded Files
-      uses: actions/upload-artifact@v4
-      with:
-        name: instagram-${{ github.event.inputs.instagram_username }}-posts
-        path: downloads
+      - name: Download Instagram posts by username
+        run: |
+          mkdir -p downloads
+          gallery-dl --verbose -d downloads "https://www.instagram.com/${{ github.event.inputs.instagram_username }}/"
+
+      - name: Upload downloaded posts as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: instagram-${{ github.event.inputs.instagram_username }}-posts
+          path: downloads
