@@ -1,0 +1,30 @@
+name: Instagram Scrape
+
+on:
+  workflow_dispatch:
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Create gallery-dl config folder
+        run: mkdir -p ~/.config/gallery-dl/
+
+      - name: Decode gallery-dl config secret
+        run: echo "${{ secrets.GALLERY_DL_CONFIG_B64 }}" | base64 -d > ~/.config/gallery-dl/config.json
+
+      - name: Install gallery-dl
+        run: pip install gallery-dl
+
+      - name: Run gallery-dl for Instagram user
+        run: gallery-dl https://www.instagram.com/marketsbyzerodha/
+
+      - name: Upload downloaded posts as artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: instagram-posts
+          path: ./marketsbyzerodha
