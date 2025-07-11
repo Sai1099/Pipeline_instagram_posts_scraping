@@ -27,10 +27,10 @@ jobs:
     - name: Download Public Instagram Posts
       run: |
         mkdir -p downloads
-        gallery-dl --verbose -d downloads "https://www.instagram.com/marketsbyzerodha/"
+        gallery-dl --verbose -d downloads "https://www.instagram.com/${{ github.event.inputs.instagram_username }}/"
 
     - name: Upload Downloaded Files
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: instagram-${{ github.event.inputs.instagram_username }}-posts
         path: downloads
