@@ -1,10 +1,10 @@
-name: Download Instagram Posts by Username (with Cookies)
+name: Download Instagram Posts by Username
 
 on:
   workflow_dispatch:
     inputs:
       instagram_username:
-        description: 'Instagram username to download posts from'
+        description: 'Instagram username (public or private you follow)'
         required: true
         default: 'marketsbyzerodha'
 
@@ -24,7 +24,7 @@ jobs:
       - name: Install gallery-dl
         run: pip install -U gallery-dl
 
-      - name: Configure gallery-dl with Instagram cookies and user-agent
+      - name: Configure gallery-dl with Instagram session cookies
         run: |
           mkdir -p ~/.config/gallery-dl
           cat <<EOF > ~/.config/gallery-dl/config.json
