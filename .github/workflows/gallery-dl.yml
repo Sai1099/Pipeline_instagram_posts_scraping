@@ -1,0 +1,82 @@
+name: Gallery-dl Instagram Scraper
+
+on:
+  schedule:
+    # Run daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  scrape-instagram:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.x'
+        
+    - name: Install gallery-dl
+      run: |
+        python -m pip install --upgrade pip
+        pip install gallery-dl
+        
+    - name: Create gallery-dl config
+      run: |
+        mkdir -p ~/.config/gallery-dl
+        cat > ~/.config/gallery-dl/config.json << 'EOF'
+        {
+          "extractor": {
+            "instagram": {
+              "username": "${{ secrets.INSTAGRAM_USERNAME }}",
+              "password": "${{ secrets.INSTAGRAM_PASSWORD }}",
+              "sleep": 5,
+              "sleep-request": 2
+            }
+          },
+          "output": {
+            "directory": ["./downloads", "{subcategory}"],
+            "filename": "{date:%Y-%m-%d}_{shortcode}_{num:>02}.{extension}"
+          },
+          "postprocessor": {
+            "metadata": {
+              "mode": "json",
+              "filename": "{date:%Y-%m-%d}_{shortcode}_metadata.json"
+            }
+          }
+        }
+        EOF
+        
+    - name: Run gallery-dl
+      run: |
+        # Replace with your target Instagram URLs
+        gallery-dl "https://www.instagram.com/marketsbyzerodha"
+        # You can add multiple URLs:
+        # gallery-dl "https://www.instagram.com/another_user/"
+        
+    - name: List downloaded files
+      run: |
+        echo "Downloaded files:"
+        ls -la downloads/ || echo "No downloads directory found"
+        
+    # Upload to Supabase S3 bucket
+    - name: Upload to Supabase Storage
+      run: |
+        pip install supabase
+        python upload_to_supabase.py
+      env:
+        SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        
+    # Commit metadata to repository (optional)
+    - name: Commit metadata only
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        # Only commit metadata JSON files, not images/videos
+        find downloads/ -name "*.json" -exec git add {} \; || echo "No JSON files found"
+        git commit -m "Add scraped Instagram metadata - $(date)" || echo "No changes to commit"
+        git push || echo "No changes to push"
