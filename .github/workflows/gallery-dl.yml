@@ -1,53 +1,35 @@
-name: Download Instagram Posts by Username
+name: Scrape Instagram Metadata
 
 on:
   workflow_dispatch:
-    inputs:
-      instagram_username:
-        description: 'Instagram username (public or private you follow)'
-        required: true
-        default: 'marketsbyzerodha'
+  schedule:
+    - cron: '0 2 * * *'  # Runs daily at 2 AM UTC
 
 jobs:
-  download:
+  scrape-instagram:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+    - name: 📁 Checkout repository
+      uses: actions/checkout@v3
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
+    - name: 🐍 Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
 
-      - name: Install gallery-dl
-        run: pip install -U gallery-dl
+    - name: 📦 Install dependencies
+      run: |
+        pip install requests
 
-      - name: Configure gallery-dl with Instagram session cookies
-        run: |
-          mkdir -p ~/.config/gallery-dl
-          cat <<EOF > ~/.config/gallery-dl/config.json
-          {
-            "extractor": {
-              "instagram": {
-                "cookies": {
-                  "sessionid": "${{ secrets.INSTAGRAM_SESSIONID }}",
-                  "ds_user_id": "${{ secrets.INSTAGRAM_USER_ID }}"
-                },
-                "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-              }
-            }
-          }
-          EOF
+    - name: 📸 Run scraper script
+      run: |
+        python scrape_instagram_metadata.py
 
-      - name: Download Instagram posts by username
-        run: |
-          mkdir -p downloads
-          gallery-dl --verbose -d downloads "https://www.instagram.com/${{ github.event.inputs.instagram_username }}/"
-
-      - name: Upload downloaded posts as artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: instagram-${{ github.event.inputs.instagram_username }}-posts
-          path: downloads
+    - name: 📤 Upload output as artifact (optional)
+      if: success()
+      uses: actions/upload-artifact@v3
+      with:
+        name: instagram-metadata
+        path: |
+          output.json
