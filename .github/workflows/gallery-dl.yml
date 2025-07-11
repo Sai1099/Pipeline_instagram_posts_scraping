@@ -1,10 +1,9 @@
-name: Gallery-dl Instagram Scraper
+name: Instagram Scraper Alternative
 
 on:
   schedule:
-    # Run daily at 2 AM UTC
     - cron: '0 2 * * *'
-  workflow_dispatch: # Allow manual trigger
+  workflow_dispatch:
 
 jobs:
   scrape-instagram:
@@ -19,64 +18,173 @@ jobs:
       with:
         python-version: '3.x'
         
-    - name: Install gallery-dl
+    - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install gallery-dl
+        pip install yt-dlp supabase instaloader
         
-    - name: Create gallery-dl config
+    - name: Try Method 1 - yt-dlp
+      continue-on-error: true
       run: |
+        mkdir -p downloads/ytdlp
+        cd downloads/ytdlp
+        
+        # Download Instagram posts using yt-dlp
+        yt-dlp \
+          --write-info-json \
+          --write-thumbnail \
+          --output "%(uploader)s_%(upload_date)s_%(id)s.%(ext)s" \
+          "https://www.instagram.com/marketsbyzerodha/"
+        
+        echo "yt-dlp method completed"
+        
+    - name: Try Method 2 - Instaloader (fallback)
+      continue-on-error: true
+      run: |
+        mkdir -p downloads/instaloader
+        cd downloads/instaloader
+        
+        # Use instaloader for Instagram scraping
+        instaloader \
+          --no-profile-pic \
+          --no-captions \
+          --no-metadata-json \
+          --dirname-pattern="{target}" \
+          --filename-pattern="{date_utc:%Y-%m-%d}_{shortcode}" \
+          --max-count=20 \
+          marketsbyzerodha
+        
+        echo "instaloader method completed"
+        
+    - name: Try Method 3 - Gallery-dl with session
+      continue-on-error: true
+      run: |
+        mkdir -p downloads/gallery-dl
+        cd downloads/gallery-dl
+        
+        # Create config for gallery-dl
         mkdir -p ~/.config/gallery-dl
         cat > ~/.config/gallery-dl/config.json << 'EOF'
         {
           "extractor": {
             "instagram": {
-              "username": "${{ secrets.INSTAGRAM_USERNAME }}",
-              "password": "${{ secrets.INSTAGRAM_PASSWORD }}",
-              "sleep": 5,
-              "sleep-request": 2
+              "sleep": 10,
+              "sleep-request": 5,
+              "api": "web",
+              "include": "posts",
+              "videos": true,
+              "max-posts": 20
             }
           },
           "output": {
-            "directory": ["./downloads", "{subcategory}"],
-            "filename": "{date:%Y-%m-%d}_{shortcode}_{num:>02}.{extension}"
-          },
-          "postprocessor": {
-            "metadata": {
-              "mode": "json",
-              "filename": "{date:%Y-%m-%d}_{shortcode}_metadata.json"
-            }
+            "filename": "{date:%Y-%m-%d}_{shortcode}.{extension}"
           }
         }
         EOF
         
-    - name: Run gallery-dl
-      run: |
-        # Replace with your target Instagram URLs
-        gallery-dl "https://www.instagram.com/marketsbyzerodha"
-        # You can add multiple URLs:
-        # gallery-dl "https://www.instagram.com/another_user/"
+        gallery-dl "https://www.instagram.com/marketsbyzerodha/"
         
-    - name: List downloaded files
+    - name: Create consolidated downloads
       run: |
-        echo "Downloaded files:"
-        ls -la downloads/ || echo "No downloads directory found"
+        mkdir -p downloads/final
         
-    # Upload to Supabase S3 bucket
-    - name: Upload to Supabase Storage
+        # Copy all successful downloads to final directory
+        find downloads/ -type f \( -name "*.jpg" -o -name "*.jpeg" -o -name "*.png" -o -name "*.mp4" -o -name "*.mov" -o -name "*.webp" \) -exec cp {} downloads/final/ \;
+        
+        echo "Files in final directory:"
+        ls -la downloads/final/ || echo "No files found"
+        
+    - name: Upload to Supabase
+      if: env.SUPABASE_URL != ''
       run: |
-        pip install supabase
+        cat > upload_to_supabase.py << 'EOF'
+        import os
+        import json
+        from datetime import datetime
+        from pathlib import Path
+        from supabase import create_client, Client
+        import mimetypes
+        
+        # Initialize Supabase client
+        supabase_url = os.environ.get('SUPABASE_URL')
+        supabase_key = os.environ.get('SUPABASE_SERVICE_KEY')
+        
+        if not supabase_url or not supabase_key:
+            print("Supabase credentials not found, skipping upload")
+            exit(0)
+        
+        supabase: Client = create_client(supabase_url, supabase_key)
+        
+        BUCKET_NAME = "instagramscrapingdata"
+        DOWNLOADS_DIR = Path("downloads/final")
+        
+        if not DOWNLOADS_DIR.exists():
+            print("No downloads directory found")
+            exit(0)
+        
+        today = datetime.now().strftime('%Y-%m-%d')
+        uploaded_count = 0
+        
+        for file_path in DOWNLOADS_DIR.glob('*'):
+            if file_path.is_file():
+                try:
+                    remote_path = f"{today}/marketsbyzerodha/{file_path.name}"
+                    
+                    with open(file_path, 'rb') as f:
+                        file_content = f.read()
+                    
+                    mime_type, _ = mimetypes.guess_type(str(file_path))
+                    
+                    response = supabase.storage.from_(BUCKET_NAME).upload(
+                        remote_path,
+                        file_content,
+                        file_options={
+                            'content-type': mime_type or 'application/octet-stream',
+                            'cache-control': '3600'
+                        }
+                    )
+                    
+                    if response.status_code == 200:
+                        print(f"✅ Uploaded: {file_path.name}")
+                        uploaded_count += 1
+                    else:
+                        print(f"❌ Failed: {file_path.name}")
+                        
+                except Exception as e:
+                    print(f"❌ Error uploading {file_path.name}: {e}")
+        
+        print(f"Total uploaded: {uploaded_count}")
+        EOF
+        
         python upload_to_supabase.py
       env:
         SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
         SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         
-    # Commit metadata to repository (optional)
-    - name: Commit metadata only
+    - name: Create summary report
       run: |
-        git config --local user.email "action@github.com"
-        git config --local user.name "GitHub Action"
-        # Only commit metadata JSON files, not images/videos
-        find downloads/ -name "*.json" -exec git add {} \; || echo "No JSON files found"
-        git commit -m "Add scraped Instagram metadata - $(date)" || echo "No changes to commit"
-        git push || echo "No changes to push"
+        echo "## Instagram Scraping Summary" > summary.md
+        echo "Date: $(date)" >> summary.md
+        echo "" >> summary.md
+        echo "### Files Downloaded:" >> summary.md
+        
+        if [ -d "downloads/final" ]; then
+          file_count=$(ls -1 downloads/final/ | wc -l)
+          echo "Total files: $file_count" >> summary.md
+          echo "" >> summary.md
+          echo "Files:" >> summary.md
+          ls -la downloads/final/ >> summary.md
+        else
+          echo "No files downloaded" >> summary.md
+        fi
+        
+        cat summary.md
+        
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: instagram-downloads-${{ github.run_number }}
+        path: |
+          downloads/final/
+          summary.md
+        retention-days: 30
