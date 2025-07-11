@@ -1,4 +1,4 @@
-name: Instagram Scraper Alternative
+name: Simple Instagram Scraper
 
 on:
   schedule:
@@ -16,119 +16,100 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: '3.x'
+        python-version: '3.11'
         
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install yt-dlp supabase instaloader
+        pip install yt-dlp supabase
         
-    - name: Try Method 1 - yt-dlp
-      continue-on-error: true
+    - name: Test yt-dlp installation
       run: |
-        mkdir -p downloads/ytdlp
-        cd downloads/ytdlp
+        yt-dlp --version
+        echo "yt-dlp installed successfully"
         
-        # Download Instagram posts using yt-dlp
+    - name: Download Instagram content
+      run: |
+        mkdir -p downloads
+        cd downloads
+        
+        echo "Starting Instagram download..."
+        
+        # Download with yt-dlp (most reliable for Instagram)
         yt-dlp \
+          --verbose \
           --write-info-json \
           --write-thumbnail \
-          --output "%(uploader)s_%(upload_date)s_%(id)s.%(ext)s" \
-          "https://www.instagram.com/marketsbyzerodha/"
-        
-        echo "yt-dlp method completed"
-        
-    - name: Try Method 2 - Instaloader (fallback)
-      continue-on-error: true
-      run: |
-        mkdir -p downloads/instaloader
-        cd downloads/instaloader
-        
-        # Use instaloader for Instagram scraping
-        instaloader \
-          --no-profile-pic \
-          --no-captions \
-          --no-metadata-json \
-          --dirname-pattern="{target}" \
-          --filename-pattern="{date_utc:%Y-%m-%d}_{shortcode}" \
-          --max-count=20 \
-          marketsbyzerodha
-        
-        echo "instaloader method completed"
-        
-    - name: Try Method 3 - Gallery-dl with session
-      continue-on-error: true
-      run: |
-        mkdir -p downloads/gallery-dl
-        cd downloads/gallery-dl
-        
-        # Create config for gallery-dl
-        mkdir -p ~/.config/gallery-dl
-        cat > ~/.config/gallery-dl/config.json << 'EOF'
-        {
-          "extractor": {
-            "instagram": {
-              "sleep": 10,
-              "sleep-request": 5,
-              "api": "web",
-              "include": "posts",
-              "videos": true,
-              "max-posts": 20
-            }
-          },
-          "output": {
-            "filename": "{date:%Y-%m-%d}_{shortcode}.{extension}"
+          --format "best[ext=mp4]/best" \
+          --output "%(uploader)s_%(upload_date)s_%(title)s.%(ext)s" \
+          --max-downloads 10 \
+          "https://www.instagram.com/marketsbyzerodha/" || {
+            echo "yt-dlp failed, trying alternative URL format..."
+            yt-dlp \
+              --verbose \
+              --write-info-json \
+              --output "marketsbyzerodha_%(upload_date)s_%(id)s.%(ext)s" \
+              --max-downloads 10 \
+              "https://instagram.com/marketsbyzerodha" || {
+                echo "Both yt-dlp attempts failed"
+                exit 1
+              }
           }
-        }
-        EOF
-        
-        gallery-dl "https://www.instagram.com/marketsbyzerodha/"
-        
-    - name: Create consolidated downloads
+          
+    - name: List downloaded files
       run: |
-        mkdir -p downloads/final
+        echo "Files in downloads directory:"
+        ls -la downloads/ || echo "No files found"
         
-        # Copy all successful downloads to final directory
-        find downloads/ -type f \( -name "*.jpg" -o -name "*.jpeg" -o -name "*.png" -o -name "*.mp4" -o -name "*.mov" -o -name "*.webp" \) -exec cp {} downloads/final/ \;
+        echo "File count by type:"
+        find downloads/ -name "*.mp4" | wc -l | xargs echo "MP4 files:"
+        find downloads/ -name "*.jpg" | wc -l | xargs echo "JPG files:"
+        find downloads/ -name "*.png" | wc -l | xargs echo "PNG files:"
+        find downloads/ -name "*.json" | wc -l | xargs echo "JSON files:"
         
-        echo "Files in final directory:"
-        ls -la downloads/final/ || echo "No files found"
-        
-    - name: Upload to Supabase
-      if: env.SUPABASE_URL != ''
+    - name: Create upload script
       run: |
         cat > upload_to_supabase.py << 'EOF'
         import os
         import json
         from datetime import datetime
         from pathlib import Path
-        from supabase import create_client, Client
-        import mimetypes
         
-        # Initialize Supabase client
-        supabase_url = os.environ.get('SUPABASE_URL')
-        supabase_key = os.environ.get('SUPABASE_SERVICE_KEY')
-        
-        if not supabase_url or not supabase_key:
-            print("Supabase credentials not found, skipping upload")
+        # Check if we have files to upload
+        downloads_dir = Path('downloads')
+        if not downloads_dir.exists():
+            print('No downloads directory found')
             exit(0)
         
-        supabase: Client = create_client(supabase_url, supabase_key)
+        # Count files
+        media_files = list(downloads_dir.glob('*.mp4')) + list(downloads_dir.glob('*.jpg')) + list(downloads_dir.glob('*.png')) + list(downloads_dir.glob('*.jpeg'))
+        print(f'Found {len(media_files)} media files to upload')
         
-        BUCKET_NAME = "instagramscrapingdata"
-        DOWNLOADS_DIR = Path("downloads/final")
-        
-        if not DOWNLOADS_DIR.exists():
-            print("No downloads directory found")
+        if len(media_files) == 0:
+            print('No media files found to upload')
             exit(0)
         
-        today = datetime.now().strftime('%Y-%m-%d')
-        uploaded_count = 0
-        
-        for file_path in DOWNLOADS_DIR.glob('*'):
-            if file_path.is_file():
+        # Try to upload to Supabase
+        try:
+            from supabase import create_client, Client
+            import mimetypes
+            
+            supabase_url = os.environ.get('SUPABASE_URL')
+            supabase_key = os.environ.get('SUPABASE_SERVICE_KEY')
+            
+            if not supabase_url or not supabase_key:
+                print('Supabase credentials not found, skipping upload')
+                exit(0)
+            
+            supabase = create_client(supabase_url, supabase_key)
+            
+            BUCKET_NAME = 'instagramscrapingdata'
+            today = datetime.now().strftime('%Y-%m-%d')
+            uploaded_count = 0
+            
+            for file_path in media_files:
                 try:
-                    remote_path = f"{today}/marketsbyzerodha/{file_path.name}"
+                    remote_path = f'{today}/marketsbyzerodha/{file_path.name}'
                     
                     with open(file_path, 'rb') as f:
                         file_content = f.read()
@@ -145,46 +126,51 @@ jobs:
                     )
                     
                     if response.status_code == 200:
-                        print(f"✅ Uploaded: {file_path.name}")
+                        public_url = supabase.storage.from_(BUCKET_NAME).get_public_url(remote_path)
+                        print(f'✅ Uploaded: {file_path.name} -> {public_url}')
                         uploaded_count += 1
                     else:
-                        print(f"❌ Failed: {file_path.name}")
+                        print(f'❌ Failed to upload {file_path.name}: {response}')
                         
                 except Exception as e:
-                    print(f"❌ Error uploading {file_path.name}: {e}")
-        
-        print(f"Total uploaded: {uploaded_count}")
+                    print(f'❌ Error uploading {file_path.name}: {e}')
+            
+            print(f'Total uploaded: {uploaded_count} files')
+            
+            # Create summary
+            summary = {
+                'date': today,
+                'account': 'marketsbyzerodha',
+                'total_files': len(media_files),
+                'uploaded_files': uploaded_count,
+                'success_rate': f'{(uploaded_count/len(media_files)*100):.1f}%' if len(media_files) > 0 else '0%'
+            }
+            
+            with open('upload_summary.json', 'w') as f:
+                json.dump(summary, f, indent=2)
+            
+            print(f'Summary: {summary}')
+            
+        except ImportError:
+            print('Supabase library not available, skipping upload')
+        except Exception as e:
+            print(f'Error during upload: {e}')
         EOF
         
+    - name: Upload to Supabase
+      if: env.SUPABASE_URL != ''
+      run: |
         python upload_to_supabase.py
       env:
         SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
         SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         
-    - name: Create summary report
-      run: |
-        echo "## Instagram Scraping Summary" > summary.md
-        echo "Date: $(date)" >> summary.md
-        echo "" >> summary.md
-        echo "### Files Downloaded:" >> summary.md
-        
-        if [ -d "downloads/final" ]; then
-          file_count=$(ls -1 downloads/final/ | wc -l)
-          echo "Total files: $file_count" >> summary.md
-          echo "" >> summary.md
-          echo "Files:" >> summary.md
-          ls -la downloads/final/ >> summary.md
-        else
-          echo "No files downloaded" >> summary.md
-        fi
-        
-        cat summary.md
-        
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
+      if: always()
       with:
-        name: instagram-downloads-${{ github.run_number }}
+        name: instagram-scrape-results-${{ github.run_number }}
         path: |
-          downloads/final/
-          summary.md
+          downloads/
+          upload_summary.json
         retention-days: 30
